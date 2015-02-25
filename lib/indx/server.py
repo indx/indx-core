@@ -31,7 +31,6 @@ from indx.webserver.handlers.box import BoxHandler
 from indx.webserver.handlers.app import AppsMetaHandler
 from indx.webserver import token
 import indx.indx_pg2 as database
-from indx.sync import IndxSync
 from indx.keystore import IndxKeystore
 
 from indx.webserver.handlers.websockets import WebSocketsHandler
@@ -197,7 +196,6 @@ class WebServer:
         def on_start(arg):
             logging.debug("Server started successfully.")
             try:
-                reactor.callInThread(lambda empty: self.start_syncing(), None) # separately do indx syncing in a twisted thread
                 if not self.config['no_browser']:
                     import webbrowser
                     webbrowser.open(self.server_url)
@@ -211,66 +209,6 @@ class WebServer:
         d.addCallbacks(on_start, start_failed)
         reactor.callWhenRunning(d.callback, "INDX HTTP startup") #@UndefinedVariable
         reactor.addSystemEventTrigger("during", "shutdown", lambda *x: self.shutdown()) #@UndefinedVariable
-
-    def sync_box(self, root_box):
-        """ Start syncing the named box. """
-        logging.debug("WebServer, sync_box for root_box {0}".format(root_box))
-        return_d = Deferred()
-
-        if root_box in self.syncs:
-            logging.error("sync_box: returning from cache")
-            indxsync = self.syncs[root_box]
-            return_d.callback(indxsync)
-        else:
-            def err_cb(failure):
-                logging.error("WebServer, sync_box error getting token: {0} {1}".format(failure, failure.value))
-                # FIXME do something with the error?
-                return_d.errback(failure)
-
-            self.syncs[root_box] = None # reserve the slot
-
-            def store_cb(root_store):
-                indxsync = IndxSync(root_store, self.database, self.server_url, self.keystore, self)
-                self.syncs[root_box] = indxsync
-                return_d.callback(indxsync)
-
-            # assign ourselves a new token to access the root box using the @indx user
-            # this only works because the "create_root_box" function gave this user read permission
-            # this doesn't work in the general case.
-            def token_cb(token):
-                token.get_store().addCallbacks(store_cb, err_cb)
-
-            self.tokens.new("@indx","",root_box,"IndxSync","/","::1", self.server_id).addCallbacks(token_cb, return_d.errback)
-
-        return return_d 
-
-    def start_syncing(self):
-        """ Start IndxSyncing root boxes. (after indx is up and running) """
-        logging.debug("WebServer start_syncing")
-
-        self.syncs = {}
-
-        def err_cb(failure):
-            logging.error("WebServer, start_syncing error getting root boxes: {0} {1}".format(failure, failure.value))
-            # FIXME do something with the error?
-
-        def linked_boxes_cb(rows):
-            logging.debug("WebServer start_syncing linked_boxes_cb")
-            for row in rows:
-                linked_box = row[0]
-                logging.debug("WebServer start_syncing linked box: {0}".format(linked_box))
-
-                def sync_a_box():
-                    
-                    def sync_cb(indxsync):
-                        indxsync.sync_boxes().addCallbacks(lambda empty: logging.debug("Sucessfully called sync in webserver."), lambda failure: logging.error("Failure syncing in webserver."))
-
-                    self.sync_box(linked_box).addCallbacks(sync_cb, lambda failure: logging.error("Failure syncing in webserver."))
-
-                reactor.callInThread(lambda empty: sync_a_box(), None)
-
-        self.database.get_linked_boxes().addCallbacks(linked_boxes_cb, err_cb)
-
 
     def shutdown(self):
         ## todo put more cleanup stuff here        

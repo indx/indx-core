@@ -99,43 +99,6 @@ class AdminHandler(BaseHandler):
             .addCallback(check)\
             .addErrback(lambda *er: logging.debug('{0}'.format(er)) and self.return_forbidden(request))
 
-    def create_root_box(self, request, token):
-        """ Specify a new box as the root box for the logged in user. """
-
-        box_name = self.get_arg(request, "box")
-        if box_name is None or box_name is "":
-            logging.error("create_root_box: box is empty ({0})".format(box_name))
-            return self.return_bad_request(request)
-
-        username,password = self.get_session(request).username, self.get_session(request).password
-
-        def err_cb(failure):
-            failure.trap(Exception)
-            e = failure.value
-            logging.error("AdminHandler create_root_box err_cb: {0} {1}".format(e, failure))
-            self.return_internal_error(request)
-
-        def check(result):
-            try :
-                logging.debug(' result > {0} '.format(result))
-
-                def created_cb(empty):
-                    self.webserver.register_box(box_name, self.webserver.root)
-
-                    def synced_cb(indxsync):
-                        indxsync.sync_boxes().addCallbacks(lambda empty: self.return_created(request), lambda failure: logging.error("AdminHandler: Error creating root box: {0}".format(failure)))
-
-                    self.webserver.sync_box(box_name).addCallbacks(synced_cb, err_cb)
-
-                self.database.create_root_box(box_name, username, password).addCallbacks(created_cb, err_cb)
-            except Exception as e :
-                logging.debug('{0}'.format(e))
-
-        self._is_box_name_okay(box_name)\
-            .addCallback(check)\
-            .addErrback(lambda *er: logging.debug('{0}'.format(er)) and self.return_forbidden(request))
-
-
     def list_boxes_handler(self,request, token):
         def boxes(db_list):
             return self.return_ok(request, data={"list": db_list})
@@ -192,15 +155,6 @@ class AdminHandler(BaseHandler):
         return self.return_ok(request)
         
 AdminHandler.subhandlers = [
-    {
-        'prefix': 'create_root_box',
-        'methods': ['GET'],
-        'require_auth': True,
-        'require_token': False,
-        'handler': AdminHandler.create_root_box,
-        'content-type':'text/plain', # optional
-        'accept':['application/json']
-    },    
     {
         'prefix': 'list_boxes',
         'methods': ['GET'],

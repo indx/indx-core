@@ -23,8 +23,6 @@ from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 import base64
 import logging
-import json
-from twisted.internet.defer import Deferred
 
 
 BS = 16
@@ -107,77 +105,4 @@ def rsa_encrypt(key, message):
 def rsa_decrypt(key, ciphertext):
     """ Use a private key (RSA object loaded using the load_key function above) to decrypt a message into the original string. """
     return key.decrypt(base64.decodestring(ciphertext))
-
-def rsa_sign(private_key, plaintext):
-    """ Hash and sign a plaintext using a private key. Verify using rsa_verify with the public key. """
-    hsh = sha512_hash(plaintext)
-    PRNG = Crypto.Random.OSRNG.posix.new().read
-    signature = private_key.sign(hsh, PRNG)
-    return signature[0]
-
-def rsa_verify(public_key, plaintext, signature):
-    """ Hash and and verify a plain text using a public key. """
-    hsh = sha512_hash(plaintext)
-    signature_tuple = (signature, )
-    return public_key.verify(hsh, signature_tuple) == True # convert from 0/1 to False/True
-
-
-def make_encpk2(local_keys, password):
-    encpk2 = rsa_encrypt(load_key(local_keys['public']), password)
-    return json.dumps({"encpk2": encpk2, "public-hash": local_keys['public-hash']})
-
-
-
-
-### Auth functions
-
-def auth_keys(keystore, signature, key_hash, algo, method, sessionid, encpk2):
-    return_d = Deferred()
-
-    SSH_MSG_USERAUTH_REQUEST = "50"
-
-    if type(encpk2) == type("") or type(encpk2) == type(u""):
-        encpk2 = json.loads(encpk2)
-
-    def keystore_cb(keystore_results):
-
-        key = keystore_results['key'] # used to verify, below
-        user = keystore_results['username']
-        box = keystore_results['box']
-
-        def keystore2_cb(keystore_encpk2_results):
-
-            ordered_signature_text = '{0}\t{1}\t"{2}"\t{3}\t{4}'.format(SSH_MSG_USERAUTH_REQUEST, sessionid, method, algo, key_hash)
-            verified = rsa_verify(key['public'], ordered_signature_text, signature)
-            
-            if not verified:
-                logging.error("auth_keys error, signature does not verify, returning unauthorized")
-                return_d.errback(None)
-            else:
-                password = rsa_decrypt(load_key(keystore_encpk2_results['key']['private']), encpk2['encpk2'])
-                return_d.callback((user, password, box))
-
-        keystore.get(encpk2['public-hash']).addCallbacks(keystore2_cb, return_d.errback)
-
-    keystore.get(key_hash).addCallbacks(keystore_cb, return_d.errback)
-    return return_d
-
-
-def auth_client(self, private_key, key_hash, sessionid):
-    """ Key based authentication, similar to RFC4252.
-    
-        This is a client-side helper to sign the text block used by the server to verify.
-    """
-    SSH_MSG_USERAUTH_REQUEST = "50"
-    method = "publickey"
-    algo = "SHA512"
-
-    self.is_authed = False
-
-    ordered_signature_text = '{0}\t{1}\t"{2}"\t{3}\t{4}'.format(SSH_MSG_USERAUTH_REQUEST, sessionid, method, algo, key_hash)
-    signature = self.rsa_sign(private_key, ordered_signature_text)
-
-    values = {"signature": signature, "key_hash": key_hash, "algo": algo, "method": method}
-
-    return values
 
